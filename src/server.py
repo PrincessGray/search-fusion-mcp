@@ -1,5 +1,4 @@
 #!/usr/bin/env python
-
 """
 Search Fusion MCP Server - Main server implementation
 High-Availability Multi-Engine Search Aggregation MCP Server
@@ -15,6 +14,7 @@ from mcp.server.fastmcp import FastMCP, Context
 from loguru import logger
 import httpx
 import wikipedia
+from pydantic import Field
 
 from src.config.config_manager import ConfigManager
 from src.search_manager import SearchManager
@@ -46,13 +46,11 @@ class SearchFusionServer:
         
         self.last_init_attempt = 0
         self.init_cooldown = 30
-        
         # Concurrency control
         self._init_lock = asyncio.Lock()
         self._search_semaphore = asyncio.Semaphore(30)  # Limit concurrent searches
-        
         # Create MCP server
-        self.mcp = FastMCP("Search-Fusion")
+        self.mcp = FastMCP(name="Search-Fusion", port=3003)
         self._register_tools()
         
     def _setup_logging(self):
@@ -89,61 +87,41 @@ class SearchFusionServer:
         logger.info("🔧 Registering MCP tools...")
         
         @self.mcp.tool()
-        async def search(query: str, num_results: int = 10, engine: str = "auto") -> str:
+        async def search(query: str = Field(description="Search query terms"), 
+                        num_results: int = Field(description="Number of results to return, should be added if you want to get more results", default=10), 
+                        engine: str = Field(description="Search engine type, options: auto, google, serper, jina, duckduckgo, exa, bing, baidu", default="google")) -> str:
             """Execute web search and return results
-            
-            Args:
-                query: Search query terms
-                num_results: Number of results to return, default 10
-                engine: Search engine type, options:
-                    - "auto": Automatically select best available search engine (default)
-                    - "google": Prioritize Google search (requires API key)
-                    - "serper": Prioritize Serper search (requires API key)
-                    - "jina": Prioritize Jina AI search
-                    - "duckduckgo": Prioritize DuckDuckGo search
-                    - "exa": Prioritize Exa search (requires API key)
-                    - "bing": Prioritize Bing search (requires API key)
-                    - "baidu": Prioritize Baidu search (requires API key)
             """
-            return await self._handle_search(query, num_results, engine)
+            return await self._handle_search(query, min(num_results, 10), engine)
         
         @self.mcp.tool()
-        async def fetch_url(url: str, use_jina: bool = True, with_image_alt: bool = False, max_length: int = 50000, page_number: int = 1) -> str:
+        async def fetch_url(url: str = Field(description="Web URL to fetch"), 
+                            use_jina: bool = Field(description="Whether to prioritize Jina Reader for LLM-optimized content", default=True), 
+                            with_image_alt: bool = Field(description="Whether to generate alt text descriptions for images", default=False), 
+                            max_length: int = Field(description="Maximum content length per page, should be added if you want to get more content", default=20000), 
+                            page_number: int = Field(description="Specific page to retrieve (starting from 1), default 1", default=1)) -> str:
             """Fetch web content with intelligent pagination support
-            
-            Args:
-                url: Web URL to fetch
-                use_jina: Whether to prioritize Jina Reader for LLM-optimized content, default True
-                with_image_alt: Whether to generate alt text descriptions for images, default False
-                max_length: Maximum content length per page, auto-paginate if exceeded, default 50000 characters
-                page_number: Specific page to retrieve (starting from 1), default 1
             """
             return await self._handle_fetch_url(url, use_jina, with_image_alt, max_length, page_number)
         
         @self.mcp.tool()
-        async def get_available_engines() -> str:
-            """Get list of currently available search engines and their status"""
-            return await self._handle_get_engines()
-        
-        @self.mcp.tool()
-        async def search_wikipedia(entity: str, first_sentences: int = 10) -> str:
+        async def search_wikipedia(entity: str = Field(description="Entity to search for (people, places, concepts, events, etc.)"), 
+                                   first_sentences: int = Field(description="Number of first sentences to return (set to 0 for full content), default 10", default=10)) -> str:
             """Search Wikipedia page content
-            
-            Args:
-                entity: Entity to search for (people, places, concepts, events, etc.)
-                first_sentences: Number of first sentences to return (set to 0 for full content), default 10
             """
             return await self._handle_wikipedia_search(entity, first_sentences)
         
+        # @self.mcp.tool()
+        # async def get_available_engines() -> str:
+        #     """Get list of currently available search engines and their status"""
+        #     return await self._handle_get_engines()
+        
         @self.mcp.tool()
-        async def search_archived_webpage(url: str, year: int = 0, month: int = 0, day: int = 0) -> str:
+        async def search_archived_webpage(url: str=Field(description="Website URL to search"), 
+                                          year: int = Field(description="Target year"), 
+                                          month: int = Field(description="Target month"), 
+                                          day: int = Field(description="Target day")) -> str:
             """Search archived versions of websites using Wayback Machine
-            
-            Args:
-                url: Website URL to search
-                year: Target year (optional)
-                month: Target month (optional)
-                day: Target day (optional)
             """
             return await self._handle_wayback_search(url, year, month, day)
 
@@ -236,7 +214,7 @@ class SearchFusionServer:
                 elapsed_time = time.time() - start_time
                 logger.error(f"❌ Search error after {elapsed_time:.1f}s: {e}")
                 return self._error_response(f"Search failed: {str(e)}", query, engine)
-     
+    
     async def _handle_fetch_url(self, url: str, use_jina: bool, with_image_alt: bool, max_length: int, page_number: int) -> str:
         """Handle URL fetching requests with intelligent pagination support"""
         try:
@@ -289,7 +267,6 @@ class SearchFusionServer:
             }, ensure_ascii=False, indent=2)
     
 
-    
     async def _handle_get_engines(self) -> str:
         """Handle get available engines requests"""
         try:
@@ -300,7 +277,7 @@ class SearchFusionServer:
                     "timestamp": datetime.now().isoformat()
                 }, ensure_ascii=False, indent=2)
             
-            engines = await self.search_manager.get_available_engines()
+            engines =await self.search_manager.get_available_engines()
             stats = self.search_manager.get_search_stats()
             
             response = {
@@ -419,6 +396,7 @@ class SearchFusionServer:
     def _get_wikipedia_page(self, entity: str):
         """Synchronous helper method for getting Wikipedia page"""
         return wikipedia.page(title=entity, auto_suggest=False)
+    
     
     async def _handle_wayback_search(self, url: str, year: int, month: int, day: int) -> str:
         """Handle Wayback Machine search requests"""
@@ -543,11 +521,14 @@ class SearchFusionServer:
         
         return json.dumps(error_response, ensure_ascii=False, indent=2)
     
-    def run(self):
+    def run(self, transport: Optional[str]=None):
         """Start the server"""
         try:
             logger.info("🚀 Starting Search Fusion MCP Server...")
-            self.mcp.run()
+            if transport is not None:
+                self.mcp.run(transport=transport)
+            else:
+                self.mcp.run()
         except KeyboardInterrupt:
             logger.info("👋 Received interrupt signal, shutting down server...")
         except Exception as e:
@@ -556,11 +537,20 @@ class SearchFusionServer:
             asyncio.run(self.cleanup())
 
 
-def main():
+os.environ["GOOGLE_API_KEY"] = "AIzaSyCn7FiDikPiMxHzG840RGSLuQtgCbmDAhg"
+os.environ["GOOGLE_CSE_ID"] = "757e71991ac034e0e"
+os.environ["EXA_API_KEY"] = "4bdfafc2-9575-402d-a8df-0f88b2a4b024"
+
+def main(transport: Optional[str]=None):
     """Main entry function"""
     server = SearchFusionServer()
-    server.run()
+    server.run(transport=transport)
 
 
 if __name__ == "__main__":
-    main()
+    import argparse
+    parser = argparse.ArgumentParser(description="Search Fusion MCP Server")
+    parser.add_argument("--port", type=int, default=3003, help="Port to listen on")
+    parser.add_argument("--transport", type=str, default=None, help="Transport to use, options: stdio, http, sse, streamable-http")
+    args = parser.parse_args()
+    main(args.transport)
