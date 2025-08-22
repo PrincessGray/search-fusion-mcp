@@ -88,17 +88,17 @@ class SearchFusionServer:
         
         @self.mcp.tool()
         async def search(query: str = Field(description="Search query terms"), 
-                        num_results: int = Field(description="Number of results to return, should be added if you want to get more results", default=10), 
+                        num_results: int = Field(description="Number of results to return, should be more than 10", default=10), 
                         engine: str = Field(description="Search engine type, options: auto, google, serper, jina, duckduckgo, exa, bing, baidu", default="google")) -> str:
             """Execute web search and return results
             """
-            return await self._handle_search(query, min(num_results, 10), engine)
+            return await self._handle_search(query, max(num_results, 10), engine)
         
         @self.mcp.tool()
         async def fetch_url(url: str = Field(description="Web URL to fetch"), 
                             use_jina: bool = Field(description="Whether to prioritize Jina Reader for LLM-optimized content", default=True), 
                             with_image_alt: bool = Field(description="Whether to generate alt text descriptions for images", default=False), 
-                            max_length: int = Field(description="Maximum content length per page, should be added if you want to get more content", default=20000), 
+                            max_length: int = Field(description="Maximum content length per page, should be added if you want to get more content, should be more than 20000", default=20000), 
                             page_number: int = Field(description="Specific page to retrieve (starting from 1), default 1", default=1)) -> str:
             """Fetch web content with intelligent pagination support
             """
@@ -106,7 +106,7 @@ class SearchFusionServer:
         
         @self.mcp.tool()
         async def search_wikipedia(entity: str = Field(description="Entity to search for (people, places, concepts, events, etc.)"), 
-                                   first_sentences: int = Field(description="Number of first sentences to return (set to 0 for full content), default 10", default=10)) -> str:
+                                   first_sentences: int = Field(description="Number of first sentences to return(should be more than 20) (set to 0 for full content)", default=20)) -> str:
             """Search Wikipedia page content
             """
             return await self._handle_wikipedia_search(entity, first_sentences)
